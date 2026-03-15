@@ -1,19 +1,22 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { Navbar } from "@/components/Navbar";
-import type { Exam, Profile } from "@/types";
+import type { Exam, Question } from "@/types";
+
+const EMPTY_Q = (): Question => ({
+  text: "", options: ["A. ", "B. ", "C. ", "D. "],
+  correctIndex: 0, short: false,
+});
 
 export default function DashboardPage() {
   const [exams, setExams] = useState<Exam[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState("");
   const [title, setTitle] = useState("");
   const [expDays, setExpDays] = useState(7);
-  const [dragging, setDragging] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [questions, setQuestions] = useState<Question[]>([EMPTY_Q()]);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState("");
   const router = useRouter();
   const supabase = createClient();
 
@@ -23,37 +26,49 @@ export default function DashboardPage() {
       if (!user) { router.push("/login"); return; }
       const { data: p } = await supabase.from("profiles").select("*").eq("id", user.id).single();
       if (p?.role !== "owner") { router.push("/"); return; }
-      setProfile(p);
       const { data: e } = await supabase.from("exams").select("*")
         .eq("owner_id", user.id).order("created_at", { ascending: false });
       setExams(e || []);
     })();
   }, []);
 
-  async function handleFile(file: File) {
-    setUploading(true);
-    setUploadStatus("⏳ Đang đọc file...");
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("expDays", expDays.toString());
-      if (title.trim()) form.append("title", title.trim());
+  function updateQ(i: number, field: keyof Question, val: unknown) {
+    setQuestions(qs => qs.map((q, idx) => idx === i ? { ...q, [field]: val } : q));
+  }
 
-      setUploadStatus("🤖 AI đang phân tích câu hỏi...");
-      const res = await fetch("/api/exams", { method: "POST", body: form });
-      const data = await res.json();
+  function updateOption(qi: number, oi: number, val: string) {
+    setQuestions(qs => qs.map((q, idx) => {
+      if (idx !== qi) return q;
+      const opts = [...q.options];
+      opts[oi] = val;
+      const short = opts.every(o => o.replace(/^[A-D][.)]\s*/, "").length < 45);
+      return { ...q, options: opts, short };
+    }));
+  }
 
-      if (!res.ok) throw new Error(data.error);
+  function addQuestion() {
+    setQuestions(qs => [...qs, EMPTY_Q()]);
+  }
 
-      setUploadStatus(`✅ Tìm thấy ${data.exam.questions.length} câu hỏi!`);
-      setExams(prev => [data.exam, ...prev]);
-      setTitle("");
-      setTimeout(() => setUploadStatus(""), 3000);
-    } catch (e: unknown) {
-      setUploadStatus(`❌ ${e instanceof Error ? e.message : "Lỗi không xác định"}`);
-    } finally {
-      setUploading(false);
-    }
+  function removeQuestion(i: number) {
+    setQuestions(qs => qs.filter((_, idx) => idx !== i));
+  }
+
+  async function save() {
+    if (!title.trim()) { setMsg("❌ Hãy nhập tên bài thi!"); return; }
+    if (questions.some(q => !q.text.trim())) { setMsg("❌ Có câu hỏi chưa nhập nội dung!"); return; }
+    setSaving(true); setMsg("");
+    const res = await fetch("/api/exams", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, questions, expDays }),
+    });
+    const data = await res.json();
+    if (!res.ok) { setMsg("❌ " + data.error); setSaving(false); return; }
+    setMsg("✅ Tạo bài thi thành công!");
+    setExams(e => [data.exam, ...e]);
+    setTitle(""); setQuestions([EMPTY_Q()]);
+    setSaving(false);
   }
 
   async function deleteExam(id: string) {
@@ -65,26 +80,21 @@ export default function DashboardPage() {
   return (
     <>
       <Navbar />
-      <main style={{ maxWidth: 760, margin: "0 auto", padding: "36px 20px" }}>
-        <h1 style={{ fontSize: 32, fontWeight: 900, marginBottom: 6 }}>📋 Dashboard</h1>
-        <p style={{ color: "var(--muted)", marginBottom: 32 }}>Quản lý và tạo bài kiểm tra</p>
+      <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px 80px" }}>
+        <h1 style={{ fontSize: 30, fontWeight: 900, marginBottom: 4 }}>📋 Dashboard</h1>
+        <p style={{ color: "var(--muted)", marginBottom: 32 }}>Tạo và quản lý bài kiểm tra</p>
 
-        {/* Upload section */}
+        {/* Form tạo bài */}
         <div className="card" style={{ marginBottom: 32 }}>
           <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 20 }}>✨ Tạo bài thi mới</h2>
 
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 16 }}>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
             <div style={{ flex: "2 1 200px" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, letterSpacing: ".06em" }}>
-                TÊN BÀI THI (tùy chọn)
-              </label>
-              <input value={title} onChange={e => setTitle(e.target.value)}
-                placeholder="Để trống — AI sẽ tự đặt tên..." />
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, letterSpacing: ".06em" }}>TÊN BÀI THI</label>
+              <input value={title} onChange={e => setTitle(e.target.value)} placeholder="VD: Lịch sử 12 - Giữa kỳ II" />
             </div>
             <div style={{ flex: "1 1 160px" }}>
-              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, letterSpacing: ".06em" }}>
-                HẠN LÀM BÀI
-              </label>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "var(--muted)", marginBottom: 6, letterSpacing: ".06em" }}>HẠN LÀM BÀI</label>
               <div style={{ display: "flex", gap: 6 }}>
                 {[3, 7, 14, 30].map(d => (
                   <button key={d} onClick={() => setExpDays(d)} style={{
@@ -93,59 +103,105 @@ export default function DashboardPage() {
                     background: expDays === d ? "var(--accent)" : "transparent",
                     color: expDays === d ? "#fff" : "var(--text)",
                     fontWeight: 700, cursor: "pointer", fontFamily: "var(--font-head)",
-                    transition: "all .2s",
                   }}>{d}d</button>
                 ))}
               </div>
             </div>
           </div>
 
-          {/* Drop zone */}
-          <div
-            onDragOver={e => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
-            onClick={() => !uploading && fileRef.current?.click()}
-            style={{
-              border: `2px dashed ${dragging ? "var(--accent)" : "var(--border)"}`,
-              borderRadius: 16, padding: "40px 24px", textAlign: "center",
-              cursor: uploading ? "wait" : "pointer",
-              background: dragging ? "var(--accent-soft)" : "var(--bg)",
-              transition: "all .25s",
-            }}
-          >
-            <input ref={fileRef} type="file" accept=".pdf,.docx,.doc,.txt"
-              style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); }} />
-            {uploading ? (
-              <>
-                <div style={{ fontSize: 36, marginBottom: 10, animation: "spin 1s linear infinite" }}>⚙️</div>
-                <p style={{ fontWeight: 700, color: "var(--accent)" }}>{uploadStatus}</p>
-              </>
-            ) : (
-              <>
-                <div style={{ fontSize: 40, marginBottom: 10 }}>📁</div>
-                <p style={{ fontWeight: 700, fontSize: 16, color: "var(--text)" }}>
-                  Kéo thả hoặc click để chọn file
+          {/* Danh sách câu hỏi */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {questions.map((q, qi) => (
+              <div key={qi} style={{
+                background: "var(--bg)", borderRadius: 16, padding: 20,
+                border: "1px solid var(--border)",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <span style={{
+                    background: "var(--accent)", color: "#fff",
+                    width: 28, height: 28, borderRadius: 8, display: "flex",
+                    alignItems: "center", justifyContent: "center",
+                    fontSize: 13, fontWeight: 900, fontFamily: "var(--font-head)",
+                  }}>{qi + 1}</span>
+                  {questions.length > 1 && (
+                    <button onClick={() => removeQuestion(qi)} style={{
+                      background: "#fee2e2", color: "#dc2626", border: "none",
+                      padding: "6px 12px", borderRadius: 8, fontSize: 12,
+                      fontWeight: 700, cursor: "pointer",
+                    }}>Xóa</button>
+                  )}
+                </div>
+
+                <textarea
+                  value={q.text}
+                  onChange={e => updateQ(qi, "text", e.target.value)}
+                  placeholder={`Nội dung câu hỏi ${qi + 1}...`}
+                  rows={2}
+                  style={{ width: "100%", resize: "vertical", marginBottom: 14 }}
+                />
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {q.options.map((opt, oi) => (
+                    <div key={oi} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button onClick={() => updateQ(qi, "correctIndex", oi)} style={{
+                        width: 32, height: 32, borderRadius: 8, flexShrink: 0,
+                        border: `2px solid ${q.correctIndex === oi ? "#22c55e" : "var(--border)"}`,
+                        background: q.correctIndex === oi ? "#22c55e" : "transparent",
+                        color: q.correctIndex === oi ? "#fff" : "var(--muted)",
+                        fontWeight: 900, fontSize: 13, cursor: "pointer",
+                        fontFamily: "var(--font-head)",
+                      }}>
+                        {["A","B","C","D"][oi]}
+                      </button>
+                      <input
+                        value={opt}
+                        onChange={e => updateOption(qi, oi, e.target.value)}
+                        placeholder={`${["A","B","C","D"][oi]}. Đáp án...`}
+                        style={{ flex: 1 }}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 10 }}>
+                  💡 Nhấn chữ <strong>A / B / C / D</strong> để chọn đáp án đúng (xanh = đúng)
                 </p>
-                <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>PDF, DOCX, DOC, TXT — AI tự tìm câu hỏi</p>
-                {uploadStatus && (
-                  <p style={{ marginTop: 12, fontWeight: 700, color: uploadStatus.startsWith("❌") ? "#ef4444" : "#22c55e" }}>
-                    {uploadStatus}
-                  </p>
-                )}
-              </>
-            )}
+              </div>
+            ))}
           </div>
+
+          <button onClick={addQuestion} style={{
+            width: "100%", marginTop: 16, padding: "14px 0",
+            borderRadius: 14, border: `2px dashed var(--border)`,
+            background: "transparent", color: "var(--muted)",
+            fontSize: 15, fontWeight: 700, cursor: "pointer",
+            fontFamily: "var(--font-head)", transition: "all .2s",
+          }}>
+            + Thêm câu hỏi
+          </button>
+
+          {msg && (
+            <div style={{
+              marginTop: 16, padding: "12px 16px", borderRadius: 12,
+              background: msg.startsWith("✅") ? "#dcfce7" : "#fee2e2",
+              color: msg.startsWith("✅") ? "#15803d" : "#dc2626",
+              fontWeight: 700, fontSize: 14,
+            }}>{msg}</div>
+          )}
+
+          <button onClick={save} disabled={saving} className="btn-primary"
+            style={{ width: "100%", marginTop: 16, opacity: saving ? .7 : 1 }}>
+            {saving ? "⏳ Đang lưu..." : "💾 Lưu bài thi"}
+          </button>
         </div>
 
-        {/* Exam list */}
+        {/* Danh sách bài thi */}
         <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 16 }}>
           📚 Bài thi của bạn ({exams.length})
         </h2>
         {exams.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 40, color: "var(--muted)" }}>
-            Chưa có bài thi nào. Hãy upload file đầu tiên!
-          </div>
+          <p style={{ color: "var(--muted)", textAlign: "center", padding: 40 }}>
+            Chưa có bài thi nào. Tạo bài thi đầu tiên nhé!
+          </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {exams.map(exam => {
@@ -165,12 +221,11 @@ export default function DashboardPage() {
                     </div>
                     <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
                       <button onClick={() => router.push(`/quiz/${exam.id}`)} style={{
-                        background: expired ? "var(--border)" : "var(--accent-soft)",
-                        color: expired ? "var(--muted)" : "var(--accent)",
+                        background: "var(--accent-soft)", color: "var(--accent)",
                         border: "none", padding: "8px 16px", borderRadius: 10,
-                        fontSize: 13, fontWeight: 700, cursor: expired ? "not-allowed" : "pointer",
+                        fontSize: 13, fontWeight: 700, cursor: "pointer",
                         fontFamily: "var(--font-head)",
-                      }}>Xem trước</button>
+                      }}>Xem</button>
                       <button onClick={() => deleteExam(exam.id)} style={{
                         background: "#fee2e2", color: "#dc2626",
                         border: "none", padding: "8px 12px", borderRadius: 10,
