@@ -38,7 +38,7 @@ Trả về JSON THUẦN TÚY (không backtick, không markdown):
 "short"=true nếu tất cả đáp án dưới 45 ký tự. Chỉ JSON, không text khác.`;
   
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
